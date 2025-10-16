@@ -5,14 +5,15 @@ import uuid
 
 class Asset(models.Model):
     ASSET_TYPES = [
+        ('organization', 'Organization'),
         ('group', 'Group'),
         ('subgroup', 'Subgroup'),
-        ('organization', 'Organization'),
-        ('location', 'Location'),
         ('plant', 'Plant'),
-        ('unit', 'Unit'),
-        ('machine', 'Machine'),
-        ('building', 'Building'),
+        ('location', 'Location'),
+        ('Building', 'Building'),
+        ('Floor', 'Floor'),
+        ('Rooms', 'Rooms'),
+        ('Line', 'Line'),
         ('other', 'Other'),
     ]
 
@@ -23,7 +24,7 @@ class Asset(models.Model):
     parent = models.ForeignKey('self', null=True, blank=True, on_delete=models.CASCADE, related_name='children', db_index=True)
     description = models.TextField(blank=True, null=True)
     is_active = models.BooleanField(default=True)
-    start_date = models.DateField(null=False, blank=False)
+    start_date = models.DateField(default="2025-10-15")
     end_date = models.DateField(null=True, blank=True)
 
     class Meta:
@@ -48,14 +49,3 @@ class Asset(models.Model):
         return f"{self.asset_name} ({self.asset_type})"
 
 
-class AssetDetail(models.Model):
-    asset = models.OneToOneField(Asset, on_delete=models.CASCADE, related_name='details')
-
-    location = models.CharField(max_length=255, blank=False, null=False)
-    building = models.CharField(max_length=255, blank=False, null=False)
-    floor = models.CharField(max_length=50, blank=True, null=True)
-    room = models.CharField(max_length=255, blank=True, null=True)
-    line = models.CharField(max_length=255, blank=True, null=True)
-
-    def __str__(self):
-        return f"Details of {self.asset.asset_name}"

@@ -1,12 +1,10 @@
-# hierarchy/views.py
-
 import csv
 import io
 import logging
 
 from django.db import connections
 from django.db.utils import OperationalError
-from django.http import JsonResponse
+from django.http import JsonResponse, Http404
 
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
@@ -27,37 +25,69 @@ tracer = trace.get_tracer(__name__)
 
 # -------------------- Asset ViewSet --------------------
 class AssetViewSet(viewsets.ModelViewSet):
-    queryset = Asset.objects.all()
     serializer_class = AssetSerializer
     permission_classes = [IsAuthenticated, IsOwnerOrReadOnly]
 
+    def get_queryset(self):
+        # Only return top-level organizations
+        return Asset.objects.filter(asset_type='organization')
+
+    def retrieve(self, request, *args, **kwargs):
+        """Custom 404 message for organization lookup"""
+        try:
+            instance = self.get_object()  # filtered by queryset
+            serializer = self.get_serializer(instance)
+            return Response(serializer.data)
+        except Http404:
+            return Response(
+                {
+                    "success": False,
+                    "status_code": 404,
+                    "error": {"detail": "No organization is assigned to this id"},
+                    "message": "Not Found — Resource not available",
+                    "trace_id": None
+                },
+                status=404
+            )
+
     @action(detail=True, methods=['get'], url_path='children')
-    def get_children(self, request, pk=None):
+    def children(self, request, pk=None):
         """
-        Retrieve all child assets of a given asset.
+        Retrieve all descendants of an asset.
+        Optional query param: ?asset_type=<type>
+        Example:
+            /api/assets/23/children/?asset_type=Building
         """
-        with tracer.start_as_current_span("get_children") as span:
-            trace_id = format(span.get_span_context().trace_id, '032x')
-            try:
-                with tracer.start_as_current_span("fetch_asset") as db_span:
-                    asset = self.get_object()
-                    db_span.set_attribute("asset.id", asset.id)
-                    db_span.set_attribute("user.username", str(request.user))
+        try:
+            parent = self.get_object()
+        except Http404:
+            return Response(
+                {
+                    "success": False,
+                    "status_code": 404,
+                    "error": {"detail": "No organization is assigned to this id"},
+                    "message": "Not Found — Resource not available",
+                    "trace_id": None
+                },
+                status=404
+            )
 
-                with tracer.start_as_current_span("fetch_children") as children_span:
-                    children = asset.children.all()
-                    children_span.set_attribute("children.count", len(children))
+        asset_type = request.query_params.get('asset_type', None)
 
-                serializer = self.get_serializer(children, many=True)
-                logger.info(f"[trace_id={trace_id}] User {request.user} fetched children of Asset {asset.id}")
-                return Response(serializer.data)
+        # Recursive function to get all descendants
+        def get_all_descendants(asset):
+            descendants = list(asset.children.all())
+            for child in asset.children.all():
+                descendants.extend(get_all_descendants(child))
+            return descendants
 
-            except Asset.DoesNotExist:
-                logger.warning(f"[trace_id={trace_id}] Asset {pk} not found for user {request.user}")
-                return Response({"detail": f"Asset {pk} not found"}, status=404)
-            except Exception as exc:
-                logger.error(f"[trace_id={trace_id}] Error fetching children for Asset {pk}: {exc}", exc_info=True)
-                return Response({"detail": "Internal server error"}, status=500)
+        all_children = get_all_descendants(parent)
+
+        if asset_type:
+            all_children = [child for child in all_children if child.asset_type == asset_type]
+
+        serializer = self.get_serializer(all_children, many=True)
+        return Response(serializer.data)
 
 
 # -------------------- Health Probes --------------------
@@ -110,18 +140,14 @@ class SampleView(APIView):
 # -------------------- Bulk Upload API --------------------
 class BulkUploadView(APIView):
     """
-    Handles bulk upload of assets via JSON or CSV files.
+    Handles bulk upload of assets via JSON or CSV files with proper parent-child hierarchy.
     """
 
     def post(self, request, *args, **kwargs):
         # ---------------- JSON Upload ----------------
         if request.content_type == 'application/json':
             data = request.data if isinstance(request.data, list) else request.data.get('assets', [])
-            serializer = AssetSerializer(data=data, many=True)
-            if serializer.is_valid():
-                serializer.save()
-                return Response({"message": "Bulk upload successful", "count": len(serializer.data)}, status=status.HTTP_201_CREATED)
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            return self.handle_bulk_upload(data)
 
         # ---------------- CSV Upload ----------------
         file = request.FILES.get('file')
@@ -131,30 +157,52 @@ class BulkUploadView(APIView):
         decoded_file = file.read().decode('utf-8')
         io_string = io.StringIO(decoded_file)
         reader = csv.DictReader(io_string)
-        assets = []
+        data = list(reader)
 
-        for row in reader:
-            asset_data = {
-                "asset_name": row.get("asset_name"),
-                "asset_type": row.get("asset_type"),
-                "hierarchy_level": int(row.get("hierarchy_level", 0)),
-                "parent": row.get("parent") or None,
-                "description": row.get("description"),
-                "start_date": row.get("start_date"),
-                "end_date": row.get("end_date") or None,
-                "is_active": row.get("is_active", "True").lower() == "true",
-                "details": {
-                    "location": row.get("location") or "",
-                    "building": row.get("building") or "",
-                    "floor": row.get("floor"),
-                    "room": row.get("room"),
-                    "line": row.get("line"),
-                }
-            }
-            assets.append(asset_data)
+        # Convert empty strings to None
+        for row in data:
+            for k, v in row.items():
+                if v == "":
+                    row[k] = None
 
-        serializer = AssetSerializer(data=assets, many=True)
-        if serializer.is_valid():
-            serializer.save()
-            return Response({"message": "Bulk upload successful", "count": len(serializer.data)}, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        return self.handle_bulk_upload(data)
+
+    def handle_bulk_upload(self, data):
+        """
+        Handles bulk creation in order of hierarchy
+        """
+        created_assets = {}  # Maps asset_name -> Asset instance
+
+        # First pass: create top-level assets (organization)
+        top_level = [d for d in data if d.get('asset_type') == 'organization']
+        for d in top_level:
+            d['parent'] = None
+            serializer = AssetSerializer(data=d)
+            if serializer.is_valid():
+                asset = serializer.save()
+                created_assets[asset.asset_name] = asset
+            else:
+                return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        # Second pass: create child assets
+        children = [d for d in data if d.get('asset_type') != 'organization']
+        for d in children:
+            parent_name = d.get('parent')  # parent should be asset_name now
+            parent_asset = created_assets.get(parent_name)
+            if not parent_asset:
+                return Response(
+                    {"error": f"Parent '{parent_name}' not found. Upload parents first."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            d['parent'] = parent_asset.id
+            serializer = AssetSerializer(data=d)
+            if serializer.is_valid():
+                asset = serializer.save()
+                created_assets[asset.asset_name] = asset
+            else:
+                return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(
+            {"message": "Bulk upload successful", "count": len(created_assets)},
+            status=status.HTTP_201_CREATED
+        )

@@ -1,55 +1,22 @@
-{
-  "assets": [
-    {
-      "asset_name": "Nexgensis",
-      "asset_type": "organization",
-      "hierarchy_level": 0,
-      "parent": null,
-      "description": "Main organization",
-      "start_date": "2025-10-01",
-      "end_date": null,
-      "is_active": true,
-      "details": {
-        "location": "Mumbai",
-        "building": "HQ",
-        "floor": "1",
-        "room": "101",
-        "line": "1"
-      }
-    },
-    {
-      "asset_name": "Pune HQ",
-      "asset_type": "location",
-      "hierarchy_level": 1,
-      "parent": 1,
-      "description": "Pune office",
-      "start_date": "2025-10-02",
-      "end_date": null,
-      "is_active": true,
-      "details": {
-        "location": "Pune",
-        "building": "Main Building",
-        "floor": "1",
-        "room": "101",
-        "line": "1"
-      }
-    },
-    {
-      "asset_name": "Solitaire Hub Plant",
-      "asset_type": "plant",
-      "hierarchy_level": 2,
-      "parent": 2,
-      "description": "Main plant",
-      "start_date": "2025-10-03",
-      "end_date": null,
-      "is_active": true,
-      "details": {
-        "location": "Pune",
-        "building": "Solitaire Hub",
-        "floor": "1",
-        "room": "101",
-        "line": "1"
-      }
-    }
-  ]
-}
+[
+  {
+    "asset_name": "Org ABC",
+    "asset_type": "organization",
+    "hierarchy_level": 0,
+    "parent": null,
+    "description": "Top level org",
+    "start_date": "2025-10-15",
+    "end_date": "2030-12-31",
+    "is_active": true
+  },
+  {
+    "asset_name": "Group 1",
+    "asset_type": "group",
+    "hierarchy_level": 1,
+    "parent": 1,
+    "description": "First group",
+    "start_date": "2025-10-15",
+    "end_date": "2030-12-31",
+    "is_active": true
+  }
+]
